@@ -3,14 +3,18 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 
+# Configure matplotlib to use LaTeX fonts
+plt.rcParams['text.usetex'] = True
+plt.rcParams['font.family'] = 'serif'
+
 from Algo_setuptorch import get_setup, Params, build_algo_functions
 
 # ============================================================
-# 1. Config globale
+# 1. Global Configuration
 # ============================================================
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Device : {device}")
+print(f"Device: {device}")
 
 params = Params()
 
@@ -31,34 +35,36 @@ T_COMPARE = 50
 T_TRAIN   = 50
 
 # ============================================================
-# 2. DATA
+# 2. Data Loading
 # ============================================================
 
 def load_sample(seed, noise_level=0.1):
-    # On passe device aux deux get_setup → noisy déjà sur GPU
     setup       = get_setup(seed=seed, noise_level=noise_level, device=device)
     setup_clean = get_setup(seed=seed, noise_level=0.0,         device=device)
-    fcts        = build_algo_functions(setup, params)
-    noisy = setup['noisy'].unsqueeze(1)        # (1, 1, 64, 64) sur device
-    clean = setup_clean['noisy'].unsqueeze(1)  # (1, 1, 64, 64) sur device
-    return noisy, clean, fcts
+    functions   = build_algo_functions(setup, params)
+    noisy = setup['noisy'].unsqueeze(1)       
+    clean = setup_clean['noisy'].unsqueeze(1)  
+    return noisy, clean, functions
 
-print("Chargement des données...")
+print("Loading data...")
 train_data = [load_sample(s) for s in TRAIN_SEEDS]
 test_data  = [load_sample(s) for s in TEST_SEEDS]
-print(f"  Train : {len(train_data)} images  |  Test : {len(test_data)} images\n")
+print(f"  Train: {len(train_data)} images  |  Test: {len(test_data)} images\n")
 
-fcts          = train_data[0][2]
-RA            = fcts['RA']
-C             = fcts['C']
-compute_delta = fcts['compute_delta_torch']   # clé correcte
-gamma         = fcts['gamma']
-alpha_fn      = fcts['alpha']
-alpha_bar_fn  = fcts['alpha_bar']
+functions     = train_data[0][2]
+RA            = functions['RA']
+C             = functions['C']
+compute_delta = functions['compute_delta_torch']
+gamma         = functions['gamma']
+alpha_fn      = functions['alpha']
+alpha_bar_fn  = functions['alpha_bar']
 
 # ============================================================
-# 3. Utilitaires de shape
+# 3. Shape Utilities
 # ============================================================
+
+def ensure_4d(t: torch.Tensor) -> torch.Tensor:
+    """Ensure tensor has 4 dimensions."""
 
 def ensure_4d(t: torch.Tensor) -> torch.Tensor:
     while t.dim() > 4:
@@ -82,7 +88,7 @@ def unpack(tensor: torch.Tensor):
     return out
 
 # ============================================================
-# 4. DeviationNet
+# 4. Deviation Network
 # ============================================================
 
 class DeviationNet(nn.Module):
@@ -246,8 +252,8 @@ def train(n_epochs=300, lr=1e-4, T=T_TRAIN):
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=150, gamma=0.5)
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"Parametersss : {n_params:,}")
-    print(f"Training — {n_epochs} epoch | T={T}\n")
+    print(f"Parameters: {n_params:,}")
+    print(f"Training — {n_epochs} epochs | T={T}\n")
 
     train_loss_hist = []
     test_loss_hist  = []
@@ -282,11 +288,11 @@ def train(n_epochs=300, lr=1e-4, T=T_TRAIN):
         if epoch % 30 == 0:
             print(f"Epoch {epoch:4d} | Train loss = {epoch_loss:.6f} | Test loss = {test_loss:.6f}")
 
-    print("\nTraining finished.")
+    print("\nTraining complete.")
     return model, train_loss_hist, test_loss_hist
 
 # ============================================================
-# 11. Méthodes de comparaison
+# 11. Comparison Methods
 # ============================================================
 
 def run_zero(noisy, T=T_COMPARE):
@@ -341,8 +347,8 @@ if __name__ == "__main__":
     # --- Entraînement ---
     model, train_loss, test_loss = train(n_epochs=300, lr=1e-4, T=T_TRAIN)
 
-    # --- Comparaison sur les images de TEST ---
-    print(f"\nComparaison on TEST ({T_COMPARE} iterations)..")
+    # --- Comparison on test images ---
+    print(f"\nComparison on test images ({T_COMPARE} iterations)..")
 
     all_zero, all_rand, all_learned = [], [], []
 
@@ -369,10 +375,10 @@ if __name__ == "__main__":
     it_z = iters_to_threshold(res_zero,    threshold)
     it_r = iters_to_threshold(res_random,  threshold)
     it_l = iters_to_threshold(res_learned, threshold)
-    print(f"\nIterations to converge {threshold:.4f} :")
-    print(f"  Zéro     : {it_z}")
-    print(f"  Aléat.   : {it_r}")
-    print(f"  Appris   : {it_l}")
+    print(f"\nIterations to converge to {threshold:.4f}:")
+    print(f"  Zero     : {it_z}")
+    print(f"  Random   : {it_r}")
+    print(f"  Learned  : {it_l}")
 
     # ============================================================
     # Figures
@@ -380,24 +386,24 @@ if __name__ == "__main__":
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    axes[0].semilogy(train_loss, label="Train", linewidth=2)
-    axes[0].semilogy(test_loss,  label="Test",  linewidth=2, linestyle='--')
-    axes[0].axvline(x=150, color='gray', linestyle=':', alpha=0.6, label="LR ÷2")
-    axes[0].set_xlabel("Epoch")
-    axes[0].set_ylabel("Loss (log)")
-    axes[0].set_title("Training")
+    axes[0].semilogy(train_loss, label=r"Train", linewidth=2)
+    axes[0].semilogy(test_loss,  label=r"Test",  linewidth=2, linestyle='--')
+    axes[0].axvline(x=150, color='gray', linestyle=':', alpha=0.6, label=r"LR $\div 2$")
+    axes[0].set_xlabel(r"Epoch")
+    axes[0].set_ylabel(r"Loss (log)")
+    axes[0].set_title(r"Training")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
     iters = np.arange(1, T_COMPARE + 1)
-    axes[1].semilogy(iters, res_zero,    label="Zéro (base)",  linewidth=2.5)
-    axes[1].semilogy(iters, res_random,  label="Random",       linewidth=2,   linestyle='--')
-    axes[1].semilogy(iters, res_learned, label="Learned",      linewidth=2,   linestyle='-.')
+    axes[1].semilogy(iters, res_zero,    label=r"Zero (baseline)",  linewidth=2.5)
+    axes[1].semilogy(iters, res_random,  label=r"Random",           linewidth=2,   linestyle='--')
+    axes[1].semilogy(iters, res_learned, label=r"Learned",          linewidth=2,   linestyle='-.')
     axes[1].axhline(y=threshold, color='gray', linestyle=':', alpha=0.7,
-                    label=f"Seuil = {threshold:.4f}")
-    axes[1].set_xlabel("Iteration")
-    axes[1].set_ylabel("Residual ||p - y|| (log)")
-    axes[1].set_title(f"Speed of convergence — images TEST\n")
+                    label=f"Threshold $= {threshold:.4f}$")
+    axes[1].set_xlabel(r"Iteration")
+    axes[1].set_ylabel(r"Residual $\|p - y\|$ (log)")
+    axes[1].set_title(r"Convergence Speed — Test Images")
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
@@ -405,7 +411,7 @@ if __name__ == "__main__":
     plt.savefig("convergence_comparison.png", dpi=150)
     plt.show()
 
-    # --- Visualisation image (première image de test) ---
+    # --- Visualization of first test image ---
     noisy_vis, clean_vis, _ = test_data[0]
     x_z, _ = run_zero(noisy_vis,           T=T_COMPARE)
     x_l, _ = run_learned(model, noisy_vis, T=T_COMPARE)
@@ -413,13 +419,13 @@ if __name__ == "__main__":
     fig2, axs2 = plt.subplots(1, 4, figsize=(16, 4))
     for ax, img, title in zip(axs2,
                                [noisy_vis, clean_vis, x_z, x_l],
-                               ["Noisy (test)", "Clean (ref)", "Zéro", "Learned"]):
+                               [r"Noisy (test)", r"Clean (ref)", r"Zero", r"Learned"]):
         ax.imshow(img.detach().cpu().numpy().squeeze(), cmap='gray')
         ax.set_title(title)
         ax.axis('off')
-    fig2.suptitle(f"Image of TEST (seed={TEST_SEEDS[0]}) after {T_COMPARE} iterations", fontsize=13)
+    fig2.suptitle(f"Test Image (seed={TEST_SEEDS[0]}) after {T_COMPARE} iterations", fontsize=13)
     fig2.tight_layout()
     fig2.savefig("test_images.png", dpi=150)
     plt.show()
 
-    print("\nFigures sauvegardées : convergence_comparison.png, test_images.png")
+    print("\nFigures saved: convergence_comparison.png, test_images.png")
