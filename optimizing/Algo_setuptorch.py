@@ -148,7 +148,7 @@ def build_algo_functions(setup, params):
             if diff.item() < tol:   
                 break
 
-        return u
+        return u 
 
 
     def C(u):
