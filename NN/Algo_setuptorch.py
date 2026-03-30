@@ -208,8 +208,7 @@ def build_algo_functions(setup, params):
         theta_tilde = params.theta_tilde,
         RA                  = RA_torch,
         C                   = C,
-        compute_delta_torch = compute_delta_torch,
-    )                 alpha1=0.1,
+        compute_delta_torch = compute_delta_torch(                 alpha1=0.1,
                  alpha2=0.1,
                  zeta=0.9,
                  t=0.5):
