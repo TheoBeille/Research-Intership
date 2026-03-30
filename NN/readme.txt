@@ -1,4 +1,4 @@
-Folder fro the implementation of the learned beased deviaitions.
+Folder for the implementation of the learned based deviaitions.
 
 Steps that will be done: 
 
