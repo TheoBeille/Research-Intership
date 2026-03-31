@@ -8,11 +8,11 @@ import torch
 # ============================================================
 
 def get_setup(seed=0, noise_level=0.1, device=None):
-
+    size=8
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    space = odl.uniform_discr([0, 0], [100, 100], [32, 32])
+    space = odl.uniform_discr([0, 0], [100, 100], [size, size])
 
     phantom = odl.phantom.shepp_logan(space, modified=True)
     noisy   = phantom + noise_level * odl.phantom.white_noise(space, seed=seed)
@@ -32,9 +32,7 @@ def get_setup(seed=0, noise_level=0.1, device=None):
         Dy * P1
     )
 
-    # odl_torch.OperatorModule wraps ODL operators as nn.Module (CPU only).
-    # We keep them on CPU and handle the device transfer around each call,
-    # because ODL itself has no CUDA backend.
+
     D_layer     = odl_torch.OperatorModule(D)
     D_adj_layer = odl_torch.OperatorModule(D.adjoint)
     E_layer     = odl_torch.OperatorModule(E)
@@ -62,6 +60,7 @@ def get_setup(seed=0, noise_level=0.1, device=None):
         noisy=noisy_torch,  
         K=K_torch,
         device=device,
+        size=size,
     )
 
 
