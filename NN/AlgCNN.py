@@ -3,8 +3,8 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Configure matplotlib with LaTeX
-plt.rcParams['text.usetex'] = True
+# Désactiver LaTeX dans matplotlib
+plt.rcParams['text.usetex'] = False
 
 from Algo_setuptorch import get_setup, Params, build_algo_functions
 
@@ -17,7 +17,7 @@ params = Params()
 TRAIN_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7]
 TEST_SEEDS  = [8, 9]
 
-size     = 8
+size     = 16
 SHAPES   = [
     (1, 1, size, size),
     (1, 2, size, size),
@@ -26,22 +26,26 @@ SHAPES   = [
 ]
 N_CH     = sum(s[1] for s in SHAPES)   # 9
 N_BLOCKS = len(SHAPES)                  # 4
-DIM      = N_CH * size * size           # dimension aplatie d'un état = 576
-
-T=50
+DIM      = N_CH * size * size
 
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device : {device}")
 
+torch.manual_seed(0)
+np.random.seed(0)
+
+#------------------------
+#Building the data set for training + all what's needed for the algorithm
+#------------------------
 
 def load_sample(seed, noise_level=0.1):
     setup       = get_setup(seed=seed, noise_level=noise_level, device=device)
     setup_clean = get_setup(seed=seed, noise_level=0.0,         device=device)
     functions   = build_algo_functions(setup, params)
-    noisy = setup['noisy'].unsqueeze(1)
-    clean = setup_clean['noisy'].unsqueeze(1)
+    noisy = setup['noisy'].unsqueeze(1).to(device)
+    clean = setup_clean['noisy'].unsqueeze(1).to(device)
     return noisy, clean, functions
 
 print("Loading data...")
@@ -57,27 +61,24 @@ gamma         = functions['gamma']
 alpha_fn      = functions['alpha']
 alpha_bar_fn  = functions['alpha_bar']
 
-
-
-
-
-
-
-
+# ============================================================
+# Make tendor in the good form + I had a problem of dimension that was addded 
+# ============================================================
+#I am using a MLP so should be 1D
 def pack(blocks):
-
     fixed = []
+    dev = None
     for b in blocks:
         b = b.float()
-        # needs to be in 4D (B, C, H, W)
+        if dev is None:
+            dev = b.device
         if b.dim() == 5:
-            b = b.squeeze(0) 
+            b = b.squeeze(0)
         if b.dim() == 3:
-            b = b.unsqueeze(0)   
+            b = b.unsqueeze(0)
         elif b.dim() == 2:
-            b = b.unsqueeze(0).unsqueeze(0)  
-        fixed.append(b)
-   
+            b = b.unsqueeze(0).unsqueeze(0)
+        fixed.append(b.to(dev))
     for b in fixed:
         assert b.dim() == 4, f"Bloc dimension error : {b.shape}"
     return torch.cat(fixed, dim=1)
@@ -89,47 +90,52 @@ def unpack(tensor):
         c += s[1]
     return out
 
-
 # ============================================================
-#  DEVIATIONNET — MLP hidden=256
+#  DEVIATIONNET - MLP
 # ============================================================
 
 class DeviationNet(nn.Module):
-    
-    def __init__(self, hidden=64):
+    def __init__(self, hidden=256,n_layers=6):
         super().__init__()
+        in_features  = 4 * N_CH * size * size + 2
+        out_features = 2 * N_CH * size * size
 
-        in_features  = 4 * N_CH * size * size   
-        out_features = 2 * N_CH * size * size   
+        self.input_proj  = nn.Linear(in_features, hidden)
+        self.blocks = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden, hidden),
+                nn.LayerNorm(hidden),
+                nn.GELU(),
+                nn.Linear(hidden, hidden),
+            ) for _ in range(n_layers)
+        ])
+        self.output_proj = nn.Linear(hidden, out_features)
+        nn.init.zeros_(self.output_proj.weight)
+        nn.init.zeros_(self.output_proj.bias)
 
-        self.net = nn.Sequential(
-            nn.Linear(in_features, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, out_features),
-        )
+    def forward(self, x_bl, p_prev_bl, y_prev_bl, z_prev_bl, delta, n, T):
+        inp = torch.cat([pack(x_bl), pack(p_prev_bl),
+                        pack(y_prev_bl), pack(z_prev_bl)], dim=1)
+        B    = inp.shape[0]
+        flat = inp.view(B, -1)
 
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
+        context = torch.tensor(
+            [[float(delta), n / T]], device=flat.device
+        ).expand(B, 2)
 
-    def forward(self, x_bl, p_prev_bl, y_prev_bl, z_prev_bl):
-        inp = torch.cat([
-            pack(x_bl),
-            pack(p_prev_bl),
-            pack(y_prev_bl),
-            pack(z_prev_bl),
-        ], dim=1)                                # (B, 36, H, W)
+        flat = torch.cat([flat, context], dim=1)
 
-        B   = inp.shape[0]
-        inp = inp.view(B, -1)                    # (B, 36864)
-        out = self.net(inp)                      # (B, 18432)
-        out = out.view(B, 2 * N_CH, size, size)  # (B, 18, 32, 32)
+        h = self.input_proj(flat)
+        for block in self.blocks:
+            h = h + block(h)
+        out = self.output_proj(h)
+        out = out.view(B, 2 * N_CH, size, size)
 
         u_raw = unpack(out[:, :N_CH])
         v_raw = unpack(out[:, N_CH:])
+        u_raw = [torch.nan_to_num(u, nan=0.0, posinf=0.0, neginf=0.0) for u in u_raw]
+        v_raw = [torch.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0) for v in v_raw]
         return u_raw, v_raw
-
 
 # ============================================================
 #  SAFEGUARDING LAYER
@@ -139,27 +145,42 @@ class SafeguardingLayer(nn.Module):
     def __init__(self, params):
         super().__init__()
         self.p = params
+        self.eps = 1e-12
 
     def forward(self, u_raw_bl, v_raw_bl, delta, n):
         p   = self.p
-        lam = p.lam(n + 1)
-        mu  = p.mu(n + 1)
+        lam = float(p.lam(n + 1))
+        mu  = float(p.mu(n + 1))
         lpm = lam + mu
 
-        c_u = lpm * p.theta_tilde(n + 1) / p.theta_hat(n + 1)
-        c_v = lpm * p.theta_hat(n + 1)   / p.theta(n + 1)
+        th_hat = float(p.theta_hat(n + 1))
+        th_hat = max(th_hat, self.eps)
+        th = float(p.theta(n + 1))
+        th = max(th, self.eps)
+        th_tilde = float(p.theta_tilde(n + 1))
+
+        c_u = lpm * th_tilde / th_hat
+        c_v = lpm * th_hat   / th
 
         norm_u_sq = sum(u.pow(2).sum() for u in u_raw_bl)
         norm_v_sq = sum(v.pow(2).sum() for v in v_raw_bl)
 
-        Q      = c_u * norm_u_sq + c_v * norm_v_sq + 1e-12
-        budget = p.zeta * delta.clamp(min=0.0)
-        alpha  = torch.sqrt((budget / Q).clamp(max=1.0))
+        Q = c_u * norm_u_sq + c_v * norm_v_sq + 1e-12
 
-        u_bl = [alpha * u for u in u_raw_bl]
-        v_bl = [alpha * v for v in v_raw_bl]
+
+
+        delta = torch.nan_to_num(delta, nan=0.0, posinf=0.0, neginf=0.0)
+        budget = float(p.zeta) * delta.clamp(min=0.0)
+
+        ratio = (budget / Q)
+ 
+        ratio = ratio.clamp(min=0.0, max=1.0)
+        alpha = torch.sqrt(ratio)
+
+
+        u_bl = [torch.nan_to_num(alpha * u, nan=0.0, posinf=0.0, neginf=0.0) for u in u_raw_bl]
+        v_bl = [torch.nan_to_num(alpha * v, nan=0.0, posinf=0.0, neginf=0.0) for v in v_raw_bl]
         return u_bl, v_bl
-
 
 # ============================================================
 #  UNE ITERATION DE L'ALGORITHME
@@ -174,26 +195,22 @@ def one_step(x, y_prev, p_prev, z_prev, u, v, n):
     th_h = p.theta_hat(n)
     lam  = p.lam(n)
 
-    # Step 5
     y = [x[i] + a_n * (y_prev[i] - x[i]) + u[i]
          for i in range(N_BLOCKS)]
 
-    # Step 6
     z = [
         x[i]
         + a_n  * (p_prev[i] - x[i])
         + ab_n * (z_prev[i] - p_prev[i])
-        + (th_b * gam * p.beta_bar / th_h) * u[i]
+        + (th_b * gam * p.beta_bar / (th_h + 1e-12)) * u[i]
         + v[i]
         for i in range(N_BLOCKS)
     ]
 
-    # Step 7 : forward-backward
     Cy          = C(y)
     z_minus_gCy = [z[i] - gam * Cy[i] for i in range(N_BLOCKS)]
     pr          = RA(z_minus_gCy, gam)
 
-    # Step 8
     x_new = [
         x[i] + lam * (pr[i] - z[i]) + ab_n * lam * (z_prev[i] - p_prev[i])
         for i in range(N_BLOCKS)
@@ -205,7 +222,6 @@ def one_step(x, y_prev, p_prev, z_prev, u, v, n):
 
     return x_new, y, pr, z, residual
 
-
 # ============================================================
 #  MODELE UNROLLED
 # ============================================================
@@ -214,7 +230,7 @@ class UnrolledFBS(nn.Module):
     def __init__(self, T=20):
         super().__init__()
         self.T        = T
-        self.dev_net  = DeviationNet(hidden=256)
+        self.dev_blocks = DeviationNet(hidden=256)
         self.sg_layer = SafeguardingLayer(params)
 
     def _init_state(self, noisy):
@@ -237,46 +253,53 @@ class UnrolledFBS(nn.Module):
         residuals = []
 
         for n in range(self.T):
-           
             x_new, y, p, z, res = one_step(
                 x, y_prev, p_prev, z_prev, u, v, n
             )
 
-           
             delta = compute_delta(
                 p, x_new, p_prev, z, z_prev, y, y_prev, u, v, n
             )
 
-       
-            u_raw, v_raw = self.dev_net(x_new, p, y, z)
+            delta = torch.nan_to_num(delta, nan=0.0, posinf=0.0, neginf=0.0)
 
-    
+            u_raw, v_raw = self.dev_blocks(x_new, p, y, z, delta, n, self.T)
             u_new, v_new = self.sg_layer(u_raw, v_raw, delta, n)
 
-  
             x, y_prev, p_prev, z_prev = x_new, y, p, z
             u, v = u_new, v_new
 
+
+            res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
 
         return p_prev, residuals
 
+def convergence_loss(residuals, target_iter=20):
+    T      = len(residuals)
+    device = residuals[0].device
+    r0     = residuals[0].detach().clamp(min=1e-8)
 
+    # Terme 1 : log-résidu avec poids croissants
+    weights = torch.exp(torch.linspace(0, 2.0, T, device=device))
+    log_res = [torch.log(r.clamp(min=1e-8) / r0) for r in residuals]
+    base    = sum(w * l for w, l in zip(weights, log_res)) / weights.sum()
 
-def convergence_loss(residuals):
-    T       = len(residuals)
-    weights = torch.linspace(float(T), 1.0, T, device=residuals[0].device)
-    safe    = [r.clamp(max=1e6) for r in residuals]
-    r0      = safe[0].detach().clamp(min=1e-8)
-    norm    = [r / r0 for r in safe]
-    return sum(w * r for w, r in zip(weights, norm)) / weights.sum()
+    # Terme 2 : pénalité explicite à l'itération cible
+    idx     = min(target_iter - 1, T - 1)
+    penalty = torch.log(residuals[idx].clamp(min=1e-8) / r0)
 
+    # Terme 3 : régularisation taux de contraction
+    rates = [residuals[i+1] / residuals[i].detach().clamp(min=1e-8)
+             for i in range(min(target_iter, T-1))]
+    reg   = sum(r.clamp(min=0.5) for r in rates) / len(rates)
 
+    return base + 2.0 * penalty + 0.5 * reg
 # ============================================================
 #  TRAINING END-TO-END
 # ============================================================
 
-def train(n_epochs=200, lr=1e-4, T=50):
+def train(n_epochs=200, lr=1e-4, T=100):
     train_loss_hist, test_loss_hist = [], []
     epoch_global = 0
     model     = UnrolledFBS(T=T).to(device)
@@ -286,49 +309,49 @@ def train(n_epochs=200, lr=1e-4, T=50):
     print(f"Parameters: {n_params:,}")
     print(f"Training on {n_epochs} epochs...\n")
 
-    loss_history = []
-
     for epoch in range(n_epochs):
-            model.train()
-            epoch_loss, valid_count = 0.0, 0
+        model.train()
+        epoch_loss, valid_count = 0.0, 0
 
-            for noisy, _, _ in train_data:
-                optimizer.zero_grad()
-                _, residuals = model(noisy)
-                loss = convergence_loss(residuals)
-                if not torch.isfinite(loss):
-                    continue
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                epoch_loss  += loss.item()
-                valid_count += 1
+        for noisy, _, _ in train_data:
+            optimizer.zero_grad()
+            _, residuals = model(noisy)
+            loss = convergence_loss(residuals)
+            if not torch.isfinite(loss):
+                print(f"Warning: non-finite loss at epoch {epoch}, skipping batch")
+                continue
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad = torch.nan_to_num(p.grad, nan=0.0, posinf=0.0, neginf=0.0)
+            optimizer.step()
+            epoch_loss  += loss.item()
+            valid_count += 1
 
-            epoch_loss = epoch_loss / valid_count if valid_count > 0 else float('nan')
-            train_loss_hist.append(epoch_loss)
+        epoch_loss = epoch_loss / valid_count if valid_count > 0 else float('nan')
+        train_loss_hist.append(epoch_loss)
 
-            model.eval()
-            with torch.no_grad():
-                test_loss = sum(
-                    convergence_loss(model(noisy)[1]).item()
-                    for noisy, _, _ in test_data
-                ) / len(test_data)
-            test_loss_hist.append(test_loss)
+        model.eval()
+        with torch.no_grad():
+            test_loss = sum(
+                convergence_loss(model(noisy)[1]).item()
+                for noisy, _, _ in test_data
+            ) / len(test_data)
+        test_loss_hist.append(test_loss)
 
-            if epoch % 20 == 0:
-                print(f"  Epoch {epoch_global:4d} | Train={epoch_loss:.6f} | Test={test_loss:.6f}")
-            epoch_global += 1
+        if epoch % 20 == 0:
+            print(f"  Epoch {epoch_global:4d} | Train={epoch_loss:.6f} | Test={test_loss:.6f}")
+        epoch_global += 1
 
-    print("\nEntraînement terminé.")
+    print("\nEntrainement termine.")
     return model, train_loss_hist, test_loss_hist
 
-
 # ============================================================
-#  COMPARAISON : ZERO  / APPRIS
+#  COMPARAISON : ZERO / APPRIS
 # ============================================================
 
-def run_zero(T=20):
-
+def run_zero(noisy, T=1000):
     x = [
         noisy.clone(),
         torch.zeros(SHAPES[1], device=device),
@@ -343,27 +366,21 @@ def run_zero(T=20):
 
     residuals = []
     with torch.no_grad():
-        for n in range(1000):
+        for n in range(T):
             x, y_prev, p_prev, z_prev, res = one_step(
                 x, y_prev, p_prev, z_prev, u, v, n
             )
-            residuals.append(res.item())
-            print(res.item())
-            if res.item() < 1e-3:
-                print("converged")
-    
+            val = res.item() if torch.is_tensor(res) else float(res)
+            residuals.append(val)
+            if val < 1e-3:
                 break
     return residuals
 
-
-
-def run_learned(model, T=20):
-   
+def run_learned(model, noisy):
     model.eval()
     with torch.no_grad():
         _, residuals = model(noisy)
-    return [r.item() for r in residuals]
-
+    return [float(r.item()) for r in residuals]
 
 # ============================================================
 #  MAIN
@@ -371,39 +388,37 @@ def run_learned(model, T=20):
 
 if __name__ == "__main__":
 
-    T = 20
+    T = 40
 
-    # Entrainement
-    model, loss_history = train(n_epochs=200, lr=1e-4, T=T)
+    model, train_loss_hist, test_loss_hist = train(n_epochs=200, lr=1e-4, T=T)
 
-    # Comparaison
-    print("\nComparaison des 3 methodes...")
-    res_zero    = run_zero(T)
+    print("\nComparaison des methodes...")
+    noisy_example = test_data[0][0]
 
-    res_learned = run_learned(model, T)
+    res_zero    = run_zero(noisy_example, T=1000)
+    res_learned = run_learned(model, noisy_example)
 
+
+    
+  
     print(f"\nResidu final :")
     print(f"  Zero    : {res_zero[-1]:.6f}")
-
     print(f"  Appris  : {res_learned[-1]:.6f}")
 
-    # Figures
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
-    # Courbe d'entrainement
-    axes[0].semilogy(loss_history)
+    axes[0].semilogy(train_loss_hist)
     axes[0].set_xlabel("Epoch")
     axes[0].set_ylabel("Residu final (log)")
     axes[0].set_title("Courbe d'entrainement")
     axes[0].grid(True, alpha=0.3)
 
-    # Comparaison des residus
-    axes[1].semilogy(res_zero,    label="Zero deviations",    linewidth=2)
-    axes[1].semilogy(res_random,  label="Aleatoires",         linewidth=2, linestyle='--')
-    axes[1].semilogy(res_learned, label="Apprises (MLP)",     linewidth=2, linestyle='-.')
+    axes[1].semilogy(res_zero,    label="Zero deviations",  linewidth=2)
+
+    axes[1].semilogy(res_learned, label="Apprises (MLP)",    linewidth=2, linestyle='-.')
     axes[1].set_xlabel("Iteration")
     axes[1].set_ylabel("Residu ||p - y|| (log)")
-    axes[1].set_title("Comparaison des 3 methodes")
+    axes[1].set_title("Comparaison des methodes")
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 

@@ -8,7 +8,7 @@ import torch
 # ============================================================
 
 def get_setup(seed=0, noise_level=0.1, device=None):
-    size=8
+    size=16
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -192,9 +192,10 @@ def build_algo_functions(setup, params):
         diff_py = [(p[i] - y[i]) - (p_prev[i] - y_prev[i]) for i in range(4)]
         term3   = (mu_n * gam * params.beta_bar / 2.0) * sum(
                       d.norm()**2 for d in diff_py)
-
-        return torch.clamp(term1 + term2 + term3, min=0.0)
-
+        result=term1+term2+term3
+        result = torch.as_tensor(result, dtype=torch.float32, device=device)
+        return torch.clamp(result, min=0.0)
+        
     return dict(
         lam         = params.lam,
         gamma       = params.gamma,
