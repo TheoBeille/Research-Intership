@@ -159,11 +159,26 @@ def build_algo_functions(setup, params):
     def theta_tilde(lambda_n, mu_n, gamma_n, beta_bar) :
         return (lambda_n + mu_n) * gamma_n * beta_bar
 
-    def const(lambda_n, mu_n, gamma_n,gamma_prev,beta_bar):
-        
-        return alpha(lambda_n, mu_n),alpha_bar(lambda_n, mu_n, gamma_n, gamma_prev),theta(lambda_n, mu_n, gamma_n, beta_bar),theta_hat(lambda_n, mu_n, gamma_n, beta_bar),theta_bar(lambda_n, mu_n),theta_tilde(lambda_n, mu_n, gamma_n, beta_bar)
+    def const(lambda_n, mu_n, gamma_n, gamma_prev, beta_bar):
+        eps = 1e-12
 
+        # alpha
+        denom_a = lambda_n + mu_n
+        a_n = mu_n / (denom_a + eps)
 
+        # alpha_bar
+        denom_ab = gamma_prev * (lambda_n + mu_n)
+        ab_n = (gamma_n * mu_n) / (denom_ab + eps)
+
+        # thetas
+        th       = (4.0 - gamma_n * beta_bar) * (lambda_n + mu_n) - 2.0 * lambda_n ** 2
+        th_h     = 2.0 * lambda_n + 2.0 * mu_n - gamma_n * beta_bar * lambda_n ** 2
+        th_b     = (lambda_n + mu_n) - lambda_n ** 2
+        th_tilde = (lambda_n + mu_n) * gamma_n * beta_bar
+
+        return a_n, ab_n, th, th_h, th_b, th_tilde
+    
+    
     def compute_delta_torch(p, x, p_prev, z, z_prev, y, y_prev, u, v,a_n,th ,th_h,th_b,gamma,lambda_n,gam_prev,mu_n):
 
 
