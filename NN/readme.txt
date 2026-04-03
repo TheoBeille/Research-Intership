@@ -52,9 +52,4 @@ This folder contains initial experiments where neural networks are used to learn
 - **Challenge**:  
   Generalization of learned deviations across different resolutions and problem dimensions.
 
----
 
-## **Notes**
-
-- Initial experiments are conducted on small images for computational efficiency
-- Results should be interpreted as **proof-of-concept** rather than final performance benchmarks
