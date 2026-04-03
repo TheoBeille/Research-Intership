@@ -377,7 +377,7 @@ if __name__ == "__main__":
 
     model, train_loss_hist, test_loss_hist = train(n_epochs=200, lr=1e-4, T=T)
 
-    print("\nComparaison des methodes...")
+    print("\nMethod comparison...")
     noisy_example = test_data[0][0]
 
     res_zero    = run_zero(noisy_example, T=1000)
@@ -386,22 +386,22 @@ if __name__ == "__main__":
 
     
   
-    print(f"\nResidu final :")
+    print(f"\nFinal residual:")
     print(f"  Zero    : {res_zero[-1]:.6f}")
-    print(f"  Appris  : {res_learned[-1]:.6f}")
+    print(f"  Learned : {res_learned[-1]:.6f}")
 
     plt.close('all')
     fig, ax = plt.subplots(1, 1, figsize=(7, 4))
 
     ax.semilogy(res_zero,    label="Zero deviations", linewidth=2)
-    ax.semilogy(res_learned, label="Appris (MLP)",    linewidth=2, linestyle='-.')
+    ax.semilogy(res_learned, label="Learned (MLP)", linewidth=2, linestyle='-.')
     ax.set_xlabel("Iteration")
-    ax.set_ylabel("Residu ||p - y|| (log)")
-    ax.set_title("Comparaison des methodes")
+    ax.set_ylabel("Residual ||p - y|| (log)")
+    ax.set_title("Method Comparison")
     ax.legend()
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     plt.savefig("comparisonMLP_onlydev.png", dpi=150)
     plt.show()
-    print("Figure sauvegardee : comparisonMLP.png")
+    print("Figure saved: comparisonMLP_onlydev.png")
