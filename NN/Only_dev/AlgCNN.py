@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-
+torch.backends.cudnn.enabled = False
 # Désactiver LaTeX dans matplotlib
 plt.rcParams['text.usetex'] = False
 
@@ -94,48 +94,70 @@ def unpack(tensor):
 #  DEVIATIONNET - MLP
 # ============================================================
 
-class DeviationNet(nn.Module):
-    def __init__(self, hidden=256,n_layers=6):
+class DeviationCNN(nn.Module):
+    def __init__(self, hidden=64):
         super().__init__()
-        in_features  = 4 * N_CH * size * size + 2
-        out_features = 2 * N_CH * size * size
+        # entrée : concat des packs -> (B, N_CH, size, size) par pack, on concat 4 packs + context -> channels = 4*N_CH + 2
+        in_ch = 4 * N_CH + 2
+        out_ch = 2 * N_CH
 
-        self.input_proj  = nn.Linear(in_features, hidden)
-        self.blocks = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden, hidden),
-                nn.LayerNorm(hidden),
+        # encoder initial
+        self.enc = nn.Sequential(
+            nn.Conv2d(in_ch, hidden, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.GroupNorm(8, hidden),
+            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.GroupNorm(8, hidden),
+        )
+
+        # quelques blocs résiduels conv
+        res_blocks = []
+        for _ in range(4):
+            res_blocks.append(nn.Sequential(
+                nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
                 nn.GELU(),
-                nn.Linear(hidden, hidden),
-            ) for _ in range(n_layers)
-        ])
-        self.output_proj = nn.Linear(hidden, out_features)
-        nn.init.zeros_(self.output_proj.weight)
-        nn.init.zeros_(self.output_proj.bias)
+                nn.GroupNorm(8, hidden),
+                nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
+            ))
+        self.res_blocks = nn.ModuleList(res_blocks)
+
+        # projection finale
+        self.out_conv = nn.Conv2d(hidden, out_ch, kernel_size=1)
+        nn.init.zeros_(self.out_conv.weight)
+        nn.init.zeros_(self.out_conv.bias)
 
     def forward(self, x_bl, p_prev_bl, y_prev_bl, z_prev_bl, delta, n, T):
-        inp = torch.cat([pack(x_bl), pack(p_prev_bl),
-                        pack(y_prev_bl), pack(z_prev_bl)], dim=1)
-        B    = inp.shape[0]
-        flat = inp.view(B, -1)
+        # pack les blocs (retourne (B, N_CH, H, W) pour chaque pack)
+        x = pack(x_bl)           # (B, N_CH, H, W)
+        p = pack(p_prev_bl)
+        y = pack(y_prev_bl)
+        z = pack(z_prev_bl)
 
-        context = torch.tensor(
-            [[float(delta), n / T]], device=flat.device
-        ).expand(B, 2)
+        # contexte : delta et n/T -> on crée deux canaux constants spatiaux
+        B = x.shape[0]
+        device = x.device
+        ctx = torch.tensor([[float(delta), float(n) / float(T)]], device=device, dtype=x.dtype)
+        ctx = ctx.expand(B, 2)                      # (B,2)
+        ctx = ctx.view(B, 2, 1, 1).expand(B, 2, size, size)  # (B,2,H,W)
 
-        flat = torch.cat([flat, context], dim=1)
+        inp = torch.cat([x, p, y, z, ctx], dim=1)   # (B, 4*N_CH + 2, H, W)
 
-        h = self.input_proj(flat)
-        for block in self.blocks:
+        h = self.enc(inp)
+        for block in self.res_blocks:
             h = h + block(h)
-        out = self.output_proj(h)
-        out = out.view(B, 2 * N_CH, size, size)
 
+        out = self.out_conv(h)                      # (B, 2*N_CH, H, W)
+
+        # split en u_raw / v_raw et unpack en listes de blocs
         u_raw = unpack(out[:, :N_CH])
-        v_raw = unpack(out[:, N_CH:])
+        v_raw = unpack(out[:, N_CH:2*N_CH])
+
+        # sécurité numérique
         u_raw = [torch.nan_to_num(u, nan=0.0, posinf=0.0, neginf=0.0) for u in u_raw]
         v_raw = [torch.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0) for v in v_raw]
         return u_raw, v_raw
+
 
 # ============================================================
 #  SAFEGUARDING LAYER
@@ -230,7 +252,7 @@ class UnrolledFBS(nn.Module):
     def __init__(self, T=20):
         super().__init__()
         self.T        = T
-        self.dev_blocks = DeviationNet(hidden=256)
+        self.dev_blocks = DeviationCNN(hidden=64)
         self.sg_layer = SafeguardingLayer(params)
 
     def _init_state(self, noisy):
@@ -268,7 +290,6 @@ class UnrolledFBS(nn.Module):
 
             x, y_prev, p_prev, z_prev = x_new, y, p, z
             u, v = u_new, v_new
-
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
@@ -388,7 +409,16 @@ def run_learned(model, noisy):
 
 if __name__ == "__main__":
 
-    T = 40
+    T = 100
+
+
+    model = UnrolledFBS(T=5)
+    model.to(device)
+    noisy_example = train_data[0][0]
+    with torch.no_grad():
+        p_out, residuals = model(noisy_example)
+    print("Forward OK, nb residuals:", len(residuals))
+
 
     model, train_loss_hist, test_loss_hist = train(n_epochs=200, lr=1e-4, T=T)
 
@@ -401,28 +431,22 @@ if __name__ == "__main__":
 
     
   
-    print(f"\nResidu final :")
+    print(f"\nResidual final :")
     print(f"  Zero    : {res_zero[-1]:.6f}")
-    print(f"  Appris  : {res_learned[-1]:.6f}")
+    print(f"  Learned  : {res_learned[-1]:.6f}")
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    plt.close('all')
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))
 
-    axes[0].semilogy(train_loss_hist)
-    axes[0].set_xlabel("Epoch")
-    axes[0].set_ylabel("Residu final (log)")
-    axes[0].set_title("Courbe d'entrainement")
-    axes[0].grid(True, alpha=0.3)
-
-    axes[1].semilogy(res_zero,    label="Zero deviations",  linewidth=2)
-
-    axes[1].semilogy(res_learned, label="Apprises (MLP)",    linewidth=2, linestyle='-.')
-    axes[1].set_xlabel("Iteration")
-    axes[1].set_ylabel("Residu ||p - y|| (log)")
-    axes[1].set_title("Comparaison des methodes")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+    ax.semilogy(res_zero,    label="Zero deviations", linewidth=2)
+    ax.semilogy(res_learned, label="Appris (MLP)",    linewidth=2, linestyle='-.')
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Residu ||p - y|| (log)")
+    ax.set_title("Comparaison des methodes")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("comparison.png", dpi=150)
+    plt.savefig("comparisonMLP_full.png", dpi=150)
     plt.show()
-    print("Figure sauvegardee : comparison.png")
+    print("Figure sauvegardee : comparisonMLP.png")

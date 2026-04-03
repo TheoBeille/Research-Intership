@@ -77,7 +77,7 @@ class Params:
                  alpha1=0.1,
                  alpha2=0.1,
                  zeta=0.9,
-                 t=0.5):
+                 ):
 
         self.lam0     = lam0
         self.beta_bar = beta_bar
@@ -85,42 +85,10 @@ class Params:
         self.alpha1   = alpha1
         self.alpha2   = alpha2
         self.zeta     = zeta
-        self.t        = t
 
-    def lam(self, n):
-        return self.lam0 * (1 + n) ** 0.3
 
-    def gamma(self, n):
-        return self.gamma0
 
-    def mu(self, n):
-        l = self.lam(n)
-        return (1 / self.lam0) * l**2 - l
 
-    def alpha(self, n):
-        l = self.lam(n)
-        return 0 if l == 0 else (l - self.lam0) / l
-
-    def alpha_bar(self, n):
-        if n == 0:
-            return 0
-        l = self.lam(n)
-        return (self.gamma(n) / self.gamma(n - 1)) * (l - self.lam0) / l
-
-    def theta(self, n):
-        return (4 - self.gamma(n) * self.beta_bar - 2 * self.lam0) \
-               / self.lam0 * self.lam(n)**2
-
-    def theta_hat(self, n):
-        return (2 - self.lam0 * self.gamma(n) * self.beta_bar) \
-               / self.lam0 * self.lam(n)**2
-
-    def theta_bar(self, n):
-        return (1 - self.lam0) / self.lam0 * self.lam(n)**2
-
-    def theta_tilde(self, n):
-        return self.gamma(n) * self.beta_bar \
-               / self.lam0 * self.lam(n)**2
 
 
 # ============================================================
@@ -132,7 +100,9 @@ def build_algo_functions(setup, params):
     noisy_torch = setup['noisy']   # (1, 32, 32) on device
     K_torch     = setup['K']
     device      = setup['device']
-
+    beta_bar=params.beta_bar
+    
+    
     def proj_ball_torch(z, radius):
         nrm = z.norm()
         return torch.where(nrm <= radius, z, (radius / nrm) * z)
@@ -164,51 +134,69 @@ def build_algo_functions(setup, params):
             torch.zeros_like(u[3]),
         ]
 
-    def compute_delta_torch(p, x, p_prev, z, z_prev, y, y_prev, u, v, n):
-        th   = params.theta(n)
-        th_h = params.theta_hat(n)
-        th_b = params.theta_bar(n)
-        gam  = params.gamma(n)
-        mu_n = params.mu(n)
-        a_n  = params.alpha(n)
+
+
+    def alpha(lambda_n, mu_n):
+        denom = lambda_n + mu_n
+        return 0.0 if denom == 0.0 else mu_n / denom
+
+
+    def alpha_bar(lambda_n, mu_n, gamma_n, gamma_prev):
+        denom = (gamma_prev or 0.0) * (lambda_n + mu_n)
+        return 0.0 if denom == 0.0 else (gamma_n * mu_n) / denom
+
+
+    def theta(lambda_n, mu_n, gamma_n, beta_bar):
+        return (4.0 - gamma_n * beta_bar) * (lambda_n + mu_n) - 2.0 * (lambda_n ** 2)
+
+    def theta_hat(lambda_n, mu_n, gamma_n, beta_bar):
+        return 2.0 * lambda_n + 2.0 * mu_n - gamma_n * beta_bar * (lambda_n ** 2)
+
+
+    def theta_bar(lambda_n, mu_n) :
+        return (lambda_n + mu_n) - (lambda_n ** 2)
+
+    def theta_tilde(lambda_n, mu_n, gamma_n, beta_bar) :
+        return (lambda_n + mu_n) * gamma_n * beta_bar
+
+    def const(lambda_n, mu_n, gamma_n,gamma_prev,beta_bar):
+        
+        return alpha(lambda_n, mu_n),alpha_bar(lambda_n, mu_n, gamma_n, gamma_prev),theta(lambda_n, mu_n, gamma_n, beta_bar),theta_hat(lambda_n, mu_n, gamma_n, beta_bar),theta_bar(lambda_n, mu_n),theta_tilde(lambda_n, mu_n, gamma_n, beta_bar)
+
+
+    def compute_delta_torch(p, x, p_prev, z, z_prev, y, y_prev, u, v,a_n,th ,th_h,th_b,gamma,lambda_n,gam_prev,mu_n):
+
 
         # term1
         core  = [p[i] - x[i]
                  + a_n * (x[i] - p_prev[i])
-                 + (gam * params.beta_bar * params.lam(n)**2 / th_h) * u[i]
+                 + (gamma * params.beta_bar * lambda_n**2 / th_h) * u[i]
                  - (2 * th_b / th) * v[i]
                  for i in range(4)]
         term1 = th / 2 * sum(c.norm()**2 for c in core)
 
         # term2
-        gam_prev = params.gamma(n - 1) if n > 0 else gam
-        diff_z   = [(z[i] - p[i]) / gam - (z_prev[i] - p_prev[i]) / gam_prev
+     
+        diff_z   = [(z[i] - p[i]) / gamma - (z_prev[i] - p_prev[i]) / gam_prev
                     for i in range(4)]
         diff_pp  = [p[i] - p_prev[i] for i in range(4)]
-        term2    = 2 * mu_n * gam * sum(
+        term2    = 2 * mu_n * gamma * sum(
                        (diff_z[i] * diff_pp[i]).sum() for i in range(4))
 
         # term3
         diff_py = [(p[i] - y[i]) - (p_prev[i] - y_prev[i]) for i in range(4)]
-        term3   = (mu_n * gam * params.beta_bar / 2.0) * sum(
+        term3   = (mu_n * gamma * params.beta_bar / 2.0) * sum(
                       d.norm()**2 for d in diff_py)
         result=term1+term2+term3
         result = torch.as_tensor(result, dtype=torch.float32, device=device)
         return torch.clamp(result, min=0.0)
         
     return dict(
-        lam         = params.lam,
-        gamma       = params.gamma,
-        mu          = params.mu,
-        alpha       = params.alpha,
-        alpha_bar   = params.alpha_bar,
-        theta       = params.theta,
-        theta_hat   = params.theta_hat,
-        theta_bar   = params.theta_bar,
-        theta_tilde = params.theta_tilde,
+
         RA          = RA_torch,
         C           = C,
         compute_delta_torch = compute_delta_torch,
+        const=const,
     )
 
 
