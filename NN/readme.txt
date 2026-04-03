@@ -7,7 +7,7 @@ This repository contains implementations of neural network-based approaches to l
 The work is structured in two main parts:
 
 * **Only_dev/**: Experiments with limited output features (only the deviations)
-* **Full/**: Extended models with more outputs (work in progress)
+* **Everything/**: Extended models with more outputs (work in progress)
 
 ---
 
