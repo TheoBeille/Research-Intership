@@ -1,9 +1,15 @@
+
+
+
+
+
+        
 import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
-torch.backends.cudnn.enabled = False
-# Désactiver LaTeX dans matplotlib
+
+
 plt.rcParams['text.usetex'] = False
 
 from Algo_setuptorch import get_setup, Params, build_algo_functions
@@ -93,69 +99,55 @@ def unpack(tensor):
 # ============================================================
 #  DEVIATIONNET - MLP
 # ============================================================
-
-class DeviationCNN(nn.Module):
-    def __init__(self, hidden=64):
+N_CH_LEARNED = sum(s[1] for s in SHAPES[:2])   # = 3
+class DeviationNet(nn.Module):
+    def __init__(self, hidden=256):
         super().__init__()
-        # entrée : concat des packs -> (B, N_CH, size, size) par pack, on concat 4 packs + context -> channels = 4*N_CH + 2
-        in_ch = 4 * N_CH + 2
-        out_ch = 2 * N_CH
 
-        # encoder initial
-        self.enc = nn.Sequential(
-            nn.Conv2d(in_ch, hidden, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.GroupNorm(8, hidden),
-            nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.GroupNorm(8, hidden),
+        in_features  = 4 * N_CH * size * size +2
+        out_features = 2 * N_CH_LEARNED * size * size 
+
+        self.net = nn.Sequential(
+            nn.Linear(in_features, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, out_features),
         )
 
-        # quelques blocs résiduels conv
-        res_blocks = []
-        for _ in range(4):
-            res_blocks.append(nn.Sequential(
-                nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
-                nn.GELU(),
-                nn.GroupNorm(8, hidden),
-                nn.Conv2d(hidden, hidden, kernel_size=3, padding=1),
-            ))
-        self.res_blocks = nn.ModuleList(res_blocks)
-
-        # projection finale
-        self.out_conv = nn.Conv2d(hidden, out_ch, kernel_size=1)
-        nn.init.zeros_(self.out_conv.weight)
-        nn.init.zeros_(self.out_conv.bias)
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, x_bl, p_prev_bl, y_prev_bl, z_prev_bl, delta, n, T):
-        # pack les blocs (retourne (B, N_CH, H, W) pour chaque pack)
-        x = pack(x_bl)           # (B, N_CH, H, W)
-        p = pack(p_prev_bl)
-        y = pack(y_prev_bl)
-        z = pack(z_prev_bl)
 
-        # contexte : delta et n/T -> on crée deux canaux constants spatiaux
-        B = x.shape[0]
-        device = x.device
-        ctx = torch.tensor([[float(delta), float(n) / float(T)]], device=device, dtype=x.dtype)
-        ctx = ctx.expand(B, 2)                      # (B,2)
-        ctx = ctx.view(B, 2, 1, 1).expand(B, 2, size, size)  # (B,2,H,W)
+        
+        inp = torch.cat([pack(x_bl), pack(p_prev_bl),
+                        pack(y_prev_bl), pack(z_prev_bl)], dim=1)
+        B    = inp.shape[0]
+        flat = inp.view(B, -1)
 
-        inp = torch.cat([x, p, y, z, ctx], dim=1)   # (B, 4*N_CH + 2, H, W)
+        context = torch.tensor(
+            [[float(delta), n / T]], device=flat.device
+        ).expand(B, 2)
 
-        h = self.enc(inp)
-        for block in self.res_blocks:
-            h = h + block(h)
+        flat = torch.cat([flat, context], dim=1)
+        out = self.net(flat)
+        out = out.view(B, 2 * N_CH_LEARNED, size, size)
 
-        out = self.out_conv(h)                      # (B, 2*N_CH, H, W)
+        u_raw = [
+            torch.nan_to_num(out[:, 0:1],              nan=0.0, posinf=0.0, neginf=0.0),  # bloc 0
+            torch.nan_to_num(out[:, 1:3],              nan=0.0, posinf=0.0, neginf=0.0),  # bloc 1
+            torch.zeros(B, SHAPES[2][1], size, size, device=flat.device),                  # bloc 2
+            torch.zeros(B, SHAPES[3][1], size, size, device=flat.device),                  # bloc 3
+        ]
 
-        # split en u_raw / v_raw et unpack en listes de blocs
-        u_raw = unpack(out[:, :N_CH])
-        v_raw = unpack(out[:, N_CH:2*N_CH])
-
-        # sécurité numérique
-        u_raw = [torch.nan_to_num(u, nan=0.0, posinf=0.0, neginf=0.0) for u in u_raw]
-        v_raw = [torch.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0) for v in v_raw]
+        # v : même découpage, décalé de N_CH_LEARNED
+        v_raw = [
+            torch.nan_to_num(out[:, N_CH_LEARNED:N_CH_LEARNED+1], nan=0.0, posinf=0.0, neginf=0.0),  # bloc 0
+            torch.nan_to_num(out[:, N_CH_LEARNED+1:N_CH_LEARNED+3], nan=0.0, posinf=0.0, neginf=0.0), # bloc 1
+            torch.zeros(B, SHAPES[2][1], size, size, device=flat.device),                               # bloc 2
+            torch.zeros(B, SHAPES[3][1], size, size, device=flat.device),                               # bloc 3
+        ]
         return u_raw, v_raw
 
 
@@ -205,7 +197,7 @@ class SafeguardingLayer(nn.Module):
         return u_bl, v_bl
 
 # ============================================================
-#  UNE ITERATION DE L'ALGORITHME
+#   ITERATION ALGORITHME
 # ============================================================
 
 def one_step(x, y_prev, p_prev, z_prev, u, v, n):
@@ -252,7 +244,7 @@ class UnrolledFBS(nn.Module):
     def __init__(self, T=20):
         super().__init__()
         self.T        = T
-        self.dev_blocks = DeviationCNN(hidden=64)
+        self.dev_net = DeviationNet(hidden=256)
         self.sg_layer = SafeguardingLayer(params)
 
     def _init_state(self, noisy):
@@ -285,37 +277,25 @@ class UnrolledFBS(nn.Module):
 
             delta = torch.nan_to_num(delta, nan=0.0, posinf=0.0, neginf=0.0)
 
-            u_raw, v_raw = self.dev_blocks(x_new, p, y, z, delta, n, self.T)
+            u_raw, v_raw = self.dev_net(x_new, p, y, z, delta, n, self.T)
             u_new, v_new = self.sg_layer(u_raw, v_raw, delta, n)
 
             x, y_prev, p_prev, z_prev = x_new, y, p, z
             u, v = u_new, v_new
+
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
 
         return p_prev, residuals
 
-def convergence_loss(residuals, target_iter=20):
+def convergence_loss(residuals):
     T      = len(residuals)
     device = residuals[0].device
-    r0     = residuals[0].detach().clamp(min=1e-8)
-
-    # Terme 1 : log-résidu avec poids croissants
-    weights = torch.exp(torch.linspace(0, 2.0, T, device=device))
-    log_res = [torch.log(r.clamp(min=1e-8) / r0) for r in residuals]
-    base    = sum(w * l for w, l in zip(weights, log_res)) / weights.sum()
-
-    # Terme 2 : pénalité explicite à l'itération cible
-    idx     = min(target_iter - 1, T - 1)
-    penalty = torch.log(residuals[idx].clamp(min=1e-8) / r0)
-
-    # Terme 3 : régularisation taux de contraction
-    rates = [residuals[i+1] / residuals[i].detach().clamp(min=1e-8)
-             for i in range(min(target_iter, T-1))]
-    reg   = sum(r.clamp(min=0.5) for r in rates) / len(rates)
-
-    return base + 2.0 * penalty + 0.5 * reg
+    weights = torch.linspace(1.0, float(T), T, device=device)
+    weights = weights / weights.sum()
+    loss = sum(w * r for w, r in zip(weights, residuals))
+    return loss
 # ============================================================
 #  TRAINING END-TO-END
 # ============================================================
@@ -409,16 +389,7 @@ def run_learned(model, noisy):
 
 if __name__ == "__main__":
 
-    T = 40
-
-
-    model = UnrolledFBS(T=5)
-    model.to(device)
-    noisy_example = train_data[0][0]
-    with torch.no_grad():
-        p_out, residuals = model(noisy_example)
-    print("Forward OK, nb residuals:", len(residuals))
-
+    T = 100
 
     model, train_loss_hist, test_loss_hist = train(n_epochs=200, lr=1e-4, T=T)
 
@@ -431,28 +402,22 @@ if __name__ == "__main__":
 
     
   
-    print(f"\nResidual final :")
+    print(f"\nResidu final :")
     print(f"  Zero    : {res_zero[-1]:.6f}")
-    print(f"  Learned  : {res_learned[-1]:.6f}")
+    print(f"  Appris  : {res_learned[-1]:.6f}")
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    plt.close('all')
+    fig, ax = plt.subplots(1, 1, figsize=(7, 4))
 
-    axes[0].semilogy(train_loss_hist)
-    axes[0].set_xlabel("Epoch")
-    axes[0].set_ylabel("Final Residual (log)")
-    axes[0].set_title("Training")
-    axes[0].grid(True, alpha=0.3)
-
-    axes[1].semilogy(res_zero,    label="Zero deviations",  linewidth=2)
-
-    axes[1].semilogy(res_learned, label="Learned (MLP)",    linewidth=2, linestyle='-.')
-    axes[1].set_xlabel("Iteration")
-    axes[1].set_ylabel("Residual ||p - y|| (log)")
-    axes[1].set_title("Comparison of methods")
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
+    ax.semilogy(res_zero,    label="Zero deviations", linewidth=2)
+    ax.semilogy(res_learned, label="Appris (MLP)",    linewidth=2, linestyle='-.')
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("Residu ||p - y|| (log)")
+    ax.set_title("Comparaison des methodes")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("comparison.png", dpi=150)
+    plt.savefig("comparisonMLP_onlydev_primal.png", dpi=150)
     plt.show()
-    print("Figure sauvegardee : comparisonCNN.png")
+    print("Figure sauvegardee : comparisonMLP.png")
