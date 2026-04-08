@@ -8,7 +8,7 @@ import torch
 # ============================================================
 
 def get_setup(seed=0, noise_level=0.1, device=None):
-    size=16
+    size=256
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 

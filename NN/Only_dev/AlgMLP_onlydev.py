@@ -329,7 +329,7 @@ def train(n_epochs=200, lr=1e-4, T=100):
             print(f"  Epoch {epoch_global:4d} | Train={epoch_loss:.6f} | Test={test_loss:.6f}")
         epoch_global += 1
 
-    print("\nEntrainement termine.")
+    print("\nTraining finished.")
     return model, train_loss_hist, test_loss_hist
 
 # ============================================================

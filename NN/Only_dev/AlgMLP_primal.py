@@ -23,7 +23,7 @@ params = Params()
 TRAIN_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7]
 TEST_SEEDS  = [8, 9]
 
-size     = 16
+size     = 256
 SHAPES   = [
     (1, 1, size, size),
     (1, 2, size, size),
@@ -104,7 +104,7 @@ class DeviationNet(nn.Module):
     def __init__(self, hidden=256):
         super().__init__()
 
-        in_features  = 4 * N_CH * size * size +2
+        in_features  = 4 * N_CH_LEARNED * size * size +2
         out_features = 2 * N_CH_LEARNED * size * size 
 
         self.net = nn.Sequential(
@@ -121,8 +121,12 @@ class DeviationNet(nn.Module):
     def forward(self, x_bl, p_prev_bl, y_prev_bl, z_prev_bl, delta, n, T):
 
         
-        inp = torch.cat([pack(x_bl), pack(p_prev_bl),
-                        pack(y_prev_bl), pack(z_prev_bl)], dim=1)
+        inp = torch.cat([
+            pack(x_bl[:2]),       
+            pack(p_prev_bl[:2]),
+            pack(y_prev_bl[:2]),
+            pack(z_prev_bl[:2]),
+        ], dim=1)
         B    = inp.shape[0]
         flat = inp.view(B, -1)
 
@@ -141,7 +145,7 @@ class DeviationNet(nn.Module):
             torch.zeros(B, SHAPES[3][1], size, size, device=flat.device),                  # bloc 3
         ]
 
-        # v : même découpage, décalé de N_CH_LEARNED
+
         v_raw = [
             torch.nan_to_num(out[:, N_CH_LEARNED:N_CH_LEARNED+1], nan=0.0, posinf=0.0, neginf=0.0),  # bloc 0
             torch.nan_to_num(out[:, N_CH_LEARNED+1:N_CH_LEARNED+3], nan=0.0, posinf=0.0, neginf=0.0), # bloc 1
@@ -345,7 +349,7 @@ def train(n_epochs=200, lr=1e-4, T=100):
             print(f"  Epoch {epoch_global:4d} | Train={epoch_loss:.6f} | Test={test_loss:.6f}")
         epoch_global += 1
 
-    print("\nEntrainement termine.")
+    print("\nTraining finished.")
     return model, train_loss_hist, test_loss_hist
 
 # ============================================================
