@@ -296,26 +296,14 @@ class UnrolledFBS(nn.Module):
 
         return p_prev, residuals
 
-def convergence_loss(residuals, target_iter=20):
+
+def convergence_loss(residuals):
     T      = len(residuals)
     device = residuals[0].device
-    r0     = residuals[0].detach().clamp(min=1e-8)
-
-    # Terme 1 : log-résidu avec poids croissants
-    weights = torch.exp(torch.linspace(0, 2.0, T, device=device))
-    log_res = [torch.log(r.clamp(min=1e-8) / r0) for r in residuals]
-    base    = sum(w * l for w, l in zip(weights, log_res)) / weights.sum()
-
-    # Terme 2 : pénalité explicite à l'itération cible
-    idx     = min(target_iter - 1, T - 1)
-    penalty = torch.log(residuals[idx].clamp(min=1e-8) / r0)
-
-    # Terme 3 : régularisation taux de contraction
-    rates = [residuals[i+1] / residuals[i].detach().clamp(min=1e-8)
-             for i in range(min(target_iter, T-1))]
-    reg   = sum(r.clamp(min=0.5) for r in rates) / len(rates)
-
-    return base + 2.0 * penalty + 0.5 * reg
+    weights = torch.linspace(1.0, float(T), T, device=device)
+    weights = weights / weights.sum()
+    loss = sum(w * r for w, r in zip(weights, residuals))
+    return loss
 # ============================================================
 #  TRAINING END-TO-END
 # ============================================================
