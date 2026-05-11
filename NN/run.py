@@ -27,7 +27,7 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
     with torch.no_grad():
         for n in range(T_test):
-
+            print(f'iter:{n}')
             if n < 10:
                 x_new, y, p, z, res = one_step(
                     x=x, y_prev=y_prev, p_prev=p_prev, z_prev=z_prev,
@@ -86,7 +86,7 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                     x=x, y_prev=y_prev, p_prev=p_prev, z_prev=z_prev,
                     u=u, v=v, n=n, params=model.params, C=C, RA=RA,
                 )
-            print("step change:", torch.norm(x_new[0] - x[0]).item())
+
             x, y_prev, p_prev, z_prev = x_new, y, p, z
             u_prev = [u_i.clone() for u_i in u]
             v_prev = [v_i.clone() for v_i in v]
