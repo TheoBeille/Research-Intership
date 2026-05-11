@@ -176,8 +176,10 @@ def build_algo_functions(setup, params):
     K_torch     = setup['K']
     device      = setup['device']
 
-    def proj_ball_torch(z, alpha):
-        return torch.clamp(z, -alpha, alpha)
+    def proj_ball_torch(z, alpha, eps=1e-12):
+        norm = torch.sqrt(torch.sum(z**2, dim=1, keepdim=True) + eps)
+        scale = torch.clamp(alpha / norm, max=1.0)
+        return z * scale
     
     
     def RA_torch(z, gam, max_iter=50, tol=1e-4):

@@ -35,8 +35,6 @@ def plot_convergence(res_zero, res_learned,res_learned_primal,label3, title="Con
     plt.close()
     
 def plot_convergence_2(res_zero,res_learned_primal,label3="learned_primal", title="Convergence",label1="Zero (baseline)"):
-
-    
     plt.figure(figsize=(6,4))
 
     plt.loglog(res_zero, label=label1, linewidth=2)

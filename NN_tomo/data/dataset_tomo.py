@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from Algo_setup_tomo import get_setup, build_algo_functions,ray
+from NN_tomo.Algo_setup_tomo import get_setup, build_algo_functions,ray
 
 
 def load_sample(A,AT,space, seed, params, device, noise_range=(0.05, 0.2)):

@@ -1,10 +1,10 @@
 
 import numpy as np
 import torch
-from algorithm.fbs_step import one_step
-from algorithm.normalization import block_norm_sq
+from NN_tomo.algorithm.fbs_step import one_step
+from NN_tomo.algorithm.normalization import block_norm_sq
 
-from algorithm.tgv import tgv
+from NN_tomo.algorithm.tgv import tgv
 
 
 
@@ -13,6 +13,8 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
     C = functions["C"]
     RA = functions["RA"]
+    A=functions["A"]
+    sinogram=functions["sinogram"]
     compute_delta = functions["compute_delta_torch"]
 
     x, y_prev, p_prev, z_prev, u, v, u_prev, v_prev = model._init_state(initial_state)
@@ -27,22 +29,40 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
     with torch.no_grad():
         for n in range(T_test):
-
-            if n < 10:
+        
+            print(n)
+            while n<10:
                 x_new, y, p, z, res = one_step(
-                    x=x, y_prev=y_prev, p_prev=p_prev, z_prev=z_prev,
-                    u=u, v=v, n=n, params=model.params, C=C, RA=RA,
+                    x=x,
+                    y_prev=y_prev,
+                    p_prev=p_prev,
+                    z_prev=z_prev,
+                    u=u,
+                    v=v,
+                    n=n,
+                    params=model.params,
+                    C=C,
+                    RA=RA,
                 )
 
-                delta = compute_delta(p, x_new, p_prev, z, z_prev, y, y_prev, u, v, n)
+        
+
+
+        
+                delta = compute_delta(
+                    p, x_new, p_prev, z, z_prev, y, y_prev, u, v, n
+                )
                 delta = torch.nan_to_num(delta, nan=0.0, posinf=0.0, neginf=0.0)
+
 
                 x_new = [t.float() for t in x_new]
                 p = [t.float() for t in p]
                 y = [t.float() for t in y]
                 z = [t.float() for t in z]
 
-                Cy = C(y)
+
+                Cy=C(y)
+        
                 u_raw, v_raw = model.dev_net(
                     shapes=model.shapes,
                     x_blocks=x_new,
@@ -55,6 +75,7 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                 )
 
                 params = model.params
+
                 lam = float(params.lam(n + 1))
                 mu = float(params.mu(n + 1))
                 lpm = lam + mu
@@ -69,36 +90,68 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                 norm_u_sq = block_norm_sq(u_raw)
                 norm_v_sq = block_norm_sq(v_raw)
 
-                Q = c_u * norm_u_sq + c_v * norm_v_sq
+                Q = c_u * norm_u_sq + c_v * norm_v_sq 
+
                 budget = float(params.zeta) * delta.clamp(min=0.0)
 
-                ratio = torch.sqrt(budget / (Q + 1e-12))
+                ratio = torch.sqrt(budget / Q )
                 scale = model.alpha * ratio
 
                 u = [scale * u_i for u_i in u_raw]
                 v = [scale * v_i for v_i in v_raw]
 
-            else:
-                u = [torch.zeros_like(t) for t in x]
-                v = [torch.zeros_like(t) for t in x]
+    
+                x, y_prev, p_prev, z_prev = x_new, y, p, z
+                u_prev = [u_i.clone() for u_i in u]
+                v_prev = [v_i.clone() for v_i in v]
 
-                x_new, y, p, z, res = one_step(
-                    x=x, y_prev=y_prev, p_prev=p_prev, z_prev=z_prev,
-                    u=u, v=v, n=n, params=model.params, C=C, RA=RA,
+        
+                res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
+                residuals.append(res.item())
+
+                
+                tgv_x = tgv(x, initial_state, A, sinogram)
+                F_vals.append(tgv_x)
+
+                
+            
+                if return_all:
+                    x_hist.append([t.clone() for t in x])
+                    y_hist.append([t.clone() for t in y_prev])
+                    p_hist.append([t.clone() for t in p_prev])
+                    z_hist.append([t.clone() for t in z_prev])
+                    u_hist.append([t.clone() for t in u])
+                    v_hist.append([t.clone() for t in v])
+                    delta_hist.append(delta.clone())
+        
+
+            
+            u = [torch.zeros_like(t) for t in x]
+            v = [torch.zeros_like(t) for t in x]
+
+            
+            x_new, y, p, z, res = one_step(
+                    x=x,
+                    y_prev=y_prev,
+                    p_prev=p_prev,
+                    z_prev=z_prev,
+                    u=u,
+                    v=v,
+                    n=n,
+                    params=model.params,
+                    C=C,
+                    RA=RA,
                 )
-            print("step change:", torch.norm(x_new[0] - x[0]).item())
-            x, y_prev, p_prev, z_prev = x_new, y, p, z
-            u_prev = [u_i.clone() for u_i in u]
-            v_prev = [v_i.clone() for v_i in v]
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res.item())
 
-            tgv_x = tgv(x_new, initial_state, alpha1=0.1, alpha0=0.1)
-            F_vals.append(tgv_x.detach().cpu().item())
+            
+            tgv_x = tgv(x,initial_state, alpha1=0.1, alpha0=0.1) 
+            F_vals.append(tgv_x)
 
-                    
-                
+            
+        
             if return_all:
                 x_hist.append([t.clone() for t in x])
                 y_hist.append([t.clone() for t in y_prev])
@@ -108,7 +161,7 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                 v_hist.append([t.clone() for t in v])
                 delta_hist.append(delta.clone())
 
-            
+
     if return_all:
         history = {
             "x": x_hist,
@@ -131,9 +184,7 @@ def run_zero(initial_state,functions, params, shapes, T, device):
     RA = functions["RA"]
 
     B = initial_state.shape[0]
-
-    F_vals = []
-    x=[]
+    x = []
     for i, s in enumerate(shapes):
         _, Cb, H, W = s
         if i == 0:
@@ -148,19 +199,16 @@ def run_zero(initial_state,functions, params, shapes, T, device):
     v = [torch.zeros_like(t) for t in x]
 
     residuals = []
-
+    history=[]
     with torch.no_grad():
         for n in range(T):
             print(n)
             x, y_prev, p_prev, z_prev, res = one_step(
                 x, y_prev, p_prev, z_prev, u, v, n, params, C, RA
             )
-            
-            tgv_x = tgv(x,initial_state, alpha1=0.1, alpha0=0.1) 
-            F_vals.append(tgv_x)
             residuals.append(res.item())
+            history.append([t.clone() for t in x])
 
-
-    return F_vals,residuals
+    return residuals,x
 
 

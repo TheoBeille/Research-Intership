@@ -169,36 +169,32 @@ class Params:
         l = self.lam(n)
         return 0 if l == 0 else (l - self.lam0) / l
 
-    def alpha_bar(self, n,gam=None,gam_prev=None):
-        if gam==None:
-            gam  = self.gamma(n)
-            gam_prev = self.params.gamma(n-1) if n > 0 else gam
-        else:
-            gam=gam
-            gam_prev= gam_prev
+    def alpha_bar(self, n):
+  
+        gam  = self.gamma(n)
+        gam_prev = self.gamma(n-1) if n > 0 else gam
+
         if n == 0:
             return 0
         l = self.lam(n)
         return (gam /gam_prev) * (l - self.lam0) / l
 
-    def theta(self, n,gam=None):
+    def theta(self, n):
         
-        if gam==None:
-            gam  = self.gamma(n)
 
-        else:
-            gam=gam
-        
+        gam  = self.gamma(n)
+
+
+
         return (4 - gam * self.beta_bar - 2 * self.lam0) \
                / self.lam0 * self.lam(n)**2
 
-    def theta_hat(self, n,gam=None):
+    def theta_hat(self, n):
         
-        if gam==None:
-            gam  = self.gamma(n)
+
+        gam  = self.gamma(n)
             
-        else:
-            gam=gam
+  
             
         return (2 - self.lam0 * gam * self.beta_bar) \
                / self.lam0 * self.lam(n)**2
@@ -206,12 +202,12 @@ class Params:
     def theta_bar(self, n):
         return (1 - self.lam0) / self.lam0 * self.lam(n)**2
 
-    def theta_tilde(self, n,gam=None):
-        if gam==None:
-            gam  = self.gamma(n)
+    def theta_tilde(self, n):
+    
+        gam  = self.gamma(n)
    
-        else:
-            gam=gam
+
+       
     
         return gam * self.beta_bar \
                / self.lam0 * self.lam(n)**2
@@ -233,9 +229,8 @@ def build_algo_functions(setup, params):
     # PROJECTION
     # ============================================================
 
-    def proj_ball_torch(z, radius):
-        nrm = z.norm()
-        return torch.where(nrm <= radius, z, (radius / (nrm + 1e-12)) * z)
+    def proj_ball_torch(z, alpha):
+        return torch.clamp(z, -alpha, alpha)
 
     # ============================================================
     # RESOLVENT
@@ -281,17 +276,15 @@ def build_algo_functions(setup, params):
         ]
 
 
-    def compute_delta_torch(p, x, p_prev, z, z_prev, y, y_prev, u, v, n,gamma=None,gamma_prev=None):
+    def compute_delta_torch(p, x, p_prev, z, z_prev, y, y_prev, u, v, n):
         
-        if gamma==None:
-            gam  = params.gamma(n)
-            gam_prev = params.gamma(n-1) if n > 0 else gam
-        else:
-            gam=gamma
-            gam_prev= gamma_prev
+
+        gam  = params.gamma(n)
+        gam_prev = params.gamma(n-1) if n > 0 else gam
+
             
-        th   = params.theta(n,gam)
-        th_h = params.theta_hat(n,gam)
+        th   = params.theta(n)
+        th_h = params.theta_hat(n)
         th_b = params.theta_bar(n)
         mu_n = params.mu(n)
         a_n  = params.alpha(n)
@@ -325,6 +318,9 @@ def build_algo_functions(setup, params):
         C           = C,
         compute_delta_torch = compute_delta_torch,
         K=K_torch,
+        A=A,
+        AT=AT,
+        sinogram=noisy,
     )
 
 
