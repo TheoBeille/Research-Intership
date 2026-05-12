@@ -93,8 +93,10 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res.item())
-
-            tgv_x = tgv(x_new, initial_state, alpha1=0.1, alpha0=0.1)
+            u_tgv = x[0]   # u
+            w_tgv = x[1]
+            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
+            print(tgv_x.item())
             F_vals.append(tgv_x.detach().cpu().item())
 
                     
@@ -151,13 +153,15 @@ def run_zero(initial_state,functions, params, shapes, T, device):
 
     with torch.no_grad():
         for n in range(T):
-            print(n)
+            print(f"iter:{n}")
             x, y_prev, p_prev, z_prev, res = one_step(
                 x, y_prev, p_prev, z_prev, u, v, n, params, C, RA
             )
-            
-            tgv_x = tgv(x,initial_state, alpha1=0.1, alpha0=0.1) 
+            u_tgv = x[0]   # u
+            w_tgv = x[1]
+            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
             F_vals.append(tgv_x)
+            print(tgv_x.item())
             residuals.append(res.item())
 
 

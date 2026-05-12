@@ -180,8 +180,9 @@ class UnrolledFBS(nn.Module):
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
-            
-            tgv_x = tgv(x,initial_state, alpha1=0.1, alpha0=0.1) 
+            u_tgv = x[0]   # u
+            w_tgv = x[1]
+            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
             F_vals.append(tgv_x)
 
             if return_all:

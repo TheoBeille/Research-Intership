@@ -12,20 +12,13 @@ from odl.operator.pspace_ops import (
     BroadcastOperator,
 )
 
-def pdhg():
+def pdhg(data):
     U = odl.uniform_discr(
         min_pt=[-20, -20], max_pt=[20, 20], shape=[128, 128], dtype="float32"
     )
 
     A = odl.IdentityOperator(U)
-
-    phantom = odl.phantom.shepp_logan(U, modified=True)
-    data = A(phantom)
-    data += white_noise(A.range) * np.mean(data.asarray()) * 0.1
-
-    plt.imsave("phantom.png", phantom.asarray(), cmap="gray")
-    plt.imsave("data.png", data.asarray(), cmap="gray")
-
+    
     G = odl.Gradient(U, method="forward", pad_mode="symmetric")
     V = G.range
 

@@ -2,6 +2,13 @@ import odl
 import numpy as np
 import odl.contrib.torch as odl_torch
 import torch
+from odl.phantom.noise import white_noise
+from odl.operator.pspace_ops import (
+    ProductSpaceOperator,
+    ComponentProjection,
+    ReductionOperator,
+    BroadcastOperator,
+)
 
 # ============================================================
 # SETUP PROBLEM in ODL + Converting in torch
@@ -26,26 +33,31 @@ def get_setup(size,seed=0, noise_level=0.1, device=None):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    space = odl.uniform_discr([0, 0], [100, 100], [size, size])
 
-    phantom = odl.phantom.shepp_logan(space, modified=True)
-    init_state   = phantom + noise_level * odl.phantom.white_noise(space, seed=seed)
+    U = odl.uniform_discr([0, 0], [100, 100], [size, size])
 
-    D  = odl.Gradient(space, method='forward', pad_mode='symmetric')
-    Dx = odl.PartialDerivative(space, 0, method='forward', pad_mode='symmetric')
-    Dy = odl.PartialDerivative(space, 1, method='forward', pad_mode='symmetric')
+    A = odl.IdentityOperator(U)
 
+    phantom = odl.phantom.shepp_logan(U, modified=True)
+    data = A(phantom)
+    data   = phantom + noise_level * odl.phantom.white_noise(U, seed=seed)
+
+    D  = odl.Gradient(U, method='forward', pad_mode='symmetric')
+    Dx = odl.PartialDerivative(U, 0, method='forward', pad_mode='symmetric')
+    Dy = odl.PartialDerivative(U, 1, method='forward', pad_mode='symmetric')
     V  = D.range
-    P0 = odl.ComponentProjection(V, 0)
-    P1 = odl.ComponentProjection(V, 1)
+    
 
-    E = odl.BroadcastOperator(
-        Dx * P0,
-        0.5 * Dy * P0 + 0.5 * Dx * P1,
-        0.5 * Dx * P1 + 0.5 * Dy * P0,
-        Dy * P1
+    E = ProductSpaceOperator(
+        [
+            [Dx, 0],
+            [0, Dy],
+            [0.5 * Dy, 0.5 * Dx],
+        ]
     )
 
+
+    domain = odl.ProductSpace(U, V)
 
     D_layer     = odl_torch.OperatorModule(D)
     D_adj_layer = odl_torch.OperatorModule(D.adjoint)
@@ -74,16 +86,19 @@ def get_setup(size,seed=0, noise_level=0.1, device=None):
         return [out0, out1, out2, out3]
 
 
-    init_state = (torch.tensor(np.asarray(init_state), dtype=torch.float32)
+    data = (torch.tensor(np.asarray(data), dtype=torch.float32)
                    .unsqueeze(0)
                    .to(device))
 
     return dict(
-        space=space,
-        initial_state=init_state,  
+        space=U,
+        initial_state=data,  
         K=K_torch,
         device=device,
-
+        A=A,
+        D=D,
+        E=E,
+        domain=domain
     )
 
 
