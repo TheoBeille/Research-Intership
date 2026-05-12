@@ -44,7 +44,7 @@ SHAPES = [
     (1, 1, size, size),
     (1, 2, size, size),
     (1, 2, size, size),
-    (1, 4, size, size),
+    (1, 3, size, size),
 ]
 N_CH = sum(s[1] for s in SHAPES)
 N_CH_primal = sum(s[1] for s in SHAPES[:2])
@@ -66,7 +66,7 @@ model = UnrolledFBS(
     params=params,
     shapes=SHAPES,
     n_channels=N_CH_primal,
-    T=10,
+    T=20,
     alpha=0.99,
 ).to(device).float()
 
@@ -82,7 +82,7 @@ model, train_hist,val_loss_hist = train(
     print_every=5
 )
 
-torch.save(model.state_dict(), "model_final_10.pt") 
+torch.save(model.state_dict(), "model_nosafe_20.pt") 
 
 
 

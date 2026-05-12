@@ -130,7 +130,7 @@ class UnrolledFBS(nn.Module):
             Cy=C(y)
 
 
-            u_raw, v_raw = self.dev_net(
+            u, v = self.dev_net(
                 shapes=self.shapes,
                 x_blocks=x_new ,    
                 p_blocks=p      ,    
@@ -138,39 +138,8 @@ class UnrolledFBS(nn.Module):
                 z_blocks=z    ,     
                 u_prev=u_prev ,    
                 v_prev=v_prev , 
-                Cy=Cy,)
-
-            
-            params = self.params
-
-            lam = float(params.lam(n + 1))
-            mu = float(params.mu(n + 1))
-            lpm = lam + mu
-
-            theta_hat = float(params.theta_hat(n + 1))
-            theta = float(params.theta(n + 1))
-            theta_tilde = float(params.theta_tilde(n + 1))
-
-            c_u = lpm * theta_tilde / theta_hat
-            c_v = lpm * theta_hat / theta
-
-            norm_u_sq = block_norm_sq(u_raw)
-            norm_v_sq = block_norm_sq(v_raw)
-
-
-
-            Q = c_u * norm_u_sq + c_v * norm_v_sq
-
-            budget = float(params.zeta) * (delta.clamp(min=0.0))
-
-            ratio = torch.sqrt(budget / Q)
-
-
-            scale = self.alpha * ratio
-
-            u = [scale * u_i for u_i in u_raw]
-            v = [scale * v_i for v_i in v_raw]
-
+            )
+          
 
 
             x, y_prev, p_prev, z_prev = x_new, y, p, z
