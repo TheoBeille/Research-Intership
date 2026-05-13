@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from algorithm.fbs_step import one_step
 from algorithm.normalization import block_norm_sq
-from algorithm.tgv import tgv
+
 from models.deviation_net import DeviationNet
 
 
@@ -80,13 +80,13 @@ class UnrolledFBS(nn.Module):
         """
         C = functions["C"]
         RA = functions["RA"]
-
+        K = functions["K"]
         compute_delta = functions["compute_delta_torch"]
 
         x, y_prev, p_prev, z_prev, u, v,u_prev,v_prev= self._init_state(initial_state)
 
         residuals = []
-        F_vals=[]
+        AxCx=[]
 
         if return_all:
             x_hist, y_hist, p_hist, z_hist = [], [], [], []
@@ -130,7 +130,7 @@ class UnrolledFBS(nn.Module):
             Cy=C(y)
 
 
-            u, v = self.dev_net(
+            u_raw, v_raw = self.dev_net(
                 shapes=self.shapes,
                 x_blocks=x_new ,    
                 p_blocks=p      ,    
@@ -138,6 +138,7 @@ class UnrolledFBS(nn.Module):
                 z_blocks=z    ,     
                 u_prev=u_prev ,    
                 v_prev=v_prev , 
+                Cy=Cy,
             )
           
 
@@ -149,10 +150,40 @@ class UnrolledFBS(nn.Module):
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
-            u_tgv = x[0]   # u
-            w_tgv = x[1]
-            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
-            F_vals.append(tgv_x)
+            Kx = K(x)      # liste de 4 tenseurs
+            Cx = C(x)      # liste de 4 tenseurs
+            AxCx.append(sum(torch.mean((k + c)**2) for k, c in zip(Kx, Cx)))
+            
+            
+            params = self.params
+
+            lam = float(params.lam(n + 1))
+            mu = float(params.mu(n + 1))
+            lpm = lam + mu
+
+            theta_hat = float(params.theta_hat(n + 1))
+            theta = float(params.theta(n + 1))
+            theta_tilde = float(params.theta_tilde(n + 1))
+
+            c_u = lpm * theta_tilde / theta_hat
+            c_v = lpm * theta_hat / theta
+
+            norm_u_sq = block_norm_sq(u_raw)
+            norm_v_sq = block_norm_sq(v_raw)
+
+
+
+            Q = c_u * norm_u_sq + c_v * norm_v_sq
+
+            budget = float(params.zeta) * (delta.clamp(min=0.0))
+
+            ratio = torch.sqrt(budget / Q)
+
+
+            scale = self.alpha * ratio
+
+            u = [scale * u_i for u_i in u_raw]
+            v = [scale * v_i for v_i in v_raw]
 
             if return_all:
                 x_hist.append([t.clone() for t in x])
@@ -173,6 +204,6 @@ class UnrolledFBS(nn.Module):
                 "v": v_hist,
                 "delta": delta_hist,
             }
-            return F_vals, residuals, history
+            return AxCx, residuals, history
 
-        return F_vals, residuals
+        return AxCx, residuals

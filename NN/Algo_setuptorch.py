@@ -65,9 +65,7 @@ def get_setup(size,seed=0, noise_level=0.1, device=None):
     E_adj_layer = odl_torch.OperatorModule(E.adjoint)
 
     def odl_op(layer, x):
-        
-        dev = x.device
-        return layer(x.cpu()).to(dev)
+        return layer(x)
 
     def K_torch(u):
         out0 = ensure_4d(odl_op(D_adj_layer, u[2]))
@@ -202,16 +200,13 @@ def build_algo_functions(setup, params):
         for n in range(max_iter):
             Ku = K_torch(u)
             res = [z[i] - gam * Ku[i] for i in range(4)]
-            new = [
-                res[0],
-                res[1],
-                proj_ball_torch(res[2], params.alpha1),
-                proj_ball_torch(res[3], params.alpha2),
-            ]
-            diff = torch.sqrt(sum((new[i] - u[i]).pow(2).sum() for i in range(4)) + 1e-12)
+            new = [res[0], res[1], proj_ball_torch(res[2], params.alpha1), proj_ball_torch(res[3], params.alpha2)]
+            
+            diff = sum((new[i] - u[i]).pow(2).sum() for i in range(4)).sqrt()
+            print(f"  RA iter {n}: diff={diff:.4e}")  # converge-t-il ?
+            
             u = new
             if diff.item() < tol:
-                #print(f"converged it: {n}")
                 break
         return u
 

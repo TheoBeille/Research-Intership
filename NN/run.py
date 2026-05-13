@@ -4,7 +4,6 @@ import torch
 from algorithm.fbs_step import one_step
 from algorithm.normalization import block_norm_sq
 
-from algorithm.tgv import tgv
 
 
 
@@ -13,13 +12,14 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
     C = functions["C"]
     RA = functions["RA"]
+    K=functions["K"]
     compute_delta = functions["compute_delta_torch"]
 
     x, y_prev, p_prev, z_prev, u, v, u_prev, v_prev = model._init_state(initial_state)
 
     residuals = []
 
-    F_vals = []
+    AxCx=[]
 
     if return_all:
         x_hist, y_hist, p_hist, z_hist = [], [], [], []
@@ -43,7 +43,7 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                 z = [t.float() for t in z]
 
                 Cy = C(y)
-                u, v = model.dev_net(
+                u_raw, v_raw = model.dev_net(
                     shapes=model.shapes,
                     x_blocks=x_new,
                     p_blocks=p,
@@ -64,6 +64,38 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
                     x=x, y_prev=y_prev, p_prev=p_prev, z_prev=z_prev,
                     u=u, v=v, n=n, params=model.params, C=C, RA=RA,
                 )
+                
+                params = model.params
+
+                lam = float(params.lam(n + 1))
+                mu = float(params.mu(n + 1))
+                lpm = lam + mu
+
+                theta_hat = float(params.theta_hat(n + 1))
+                theta = float(params.theta(n + 1))
+                theta_tilde = float(params.theta_tilde(n + 1))
+
+                c_u = lpm * theta_tilde / theta_hat
+                c_v = lpm * theta_hat / theta
+
+                norm_u_sq = block_norm_sq(u_raw)
+                norm_v_sq = block_norm_sq(v_raw)
+
+
+
+                Q = c_u * norm_u_sq + c_v * norm_v_sq
+
+                budget = float(params.zeta) * (delta.clamp(min=0.0))
+
+                ratio = torch.sqrt(budget / Q)
+
+
+                scale = model.alpha * ratio
+
+                u = [scale * u_i for u_i in u_raw]
+                v = [scale * v_i for v_i in v_raw]
+
+
 
             x, y_prev, p_prev, z_prev = x_new, y, p, z
             u_prev = [u_i.clone() for u_i in u]
@@ -71,11 +103,12 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res.item())
-            u_tgv = x[0]   # u
-            w_tgv = x[1]
-            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
-            print(tgv_x.item())
-            F_vals.append(tgv_x.detach().cpu().item())
+
+
+            Kx = K(x)      # liste de 4 tenseurs
+            Cx = C(x)      # liste de 4 tenseurs
+            AxCx.append(sum(torch.mean((k + c)**2) for k, c in zip(Kx, Cx)).detach().cpu().numpy())
+
 
                     
                 
@@ -99,20 +132,20 @@ def run_learned(model, initial_state, clean, functions, T_test=500, return_all=F
             "v": v_hist,
             "delta": delta_hist,
         }
-        return F_vals,residuals, history
+        return AxCx,residuals, history
     
     
     
 
-    return   F_vals,residuals
+    return   AxCx,residuals
 
 def run_zero(initial_state,functions, params, shapes, T, device):
     C = functions["C"]
     RA = functions["RA"]
-
+    K=functions["K"]
     B = initial_state.shape[0]
+    AxCx=[]
 
-    F_vals = []
     x=[]
     for i, s in enumerate(shapes):
         _, Cb, H, W = s
@@ -135,14 +168,15 @@ def run_zero(initial_state,functions, params, shapes, T, device):
             x, y_prev, p_prev, z_prev, res = one_step(
                 x, y_prev, p_prev, z_prev, u, v, n, params, C, RA
             )
-            u_tgv = x[0]   # u
-            w_tgv = x[1]
-            tgv_x = tgv(u_tgv,w_tgv,initial_state) 
-            F_vals.append(tgv_x)
-            print(tgv_x.item())
+            Kx = K(x)      # liste de 4 tenseurs
+            Cx = C(x)      # liste de 4 tenseurs
+            AxCx.append(sum(torch.mean((k + c)**2) for k, c in zip(Kx, Cx)))
+
+      
+            #print(tgv_x.item())
             residuals.append(res.item())
 
 
-    return F_vals,residuals
+    return AxCx,residuals
 
 
