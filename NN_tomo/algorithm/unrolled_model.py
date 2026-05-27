@@ -2,11 +2,11 @@
 
 import torch
 import torch.nn as nn
+import random
+from algorithm.fbs_step import one_step
+from algorithm.normalization import block_norm_sq
 
-from NN_tomo.algorithm.fbs_step import one_step
-from NN_tomo.algorithm.normalization import block_norm_sq
-from NN_tomo.algorithm.tgv import tgv
-from NN_tomo.models.deviation_net import DeviationNet
+from models.deviation_net import DeviationNet
 
 
 class UnrolledFBS(nn.Module):
@@ -20,7 +20,7 @@ class UnrolledFBS(nn.Module):
         -> next iteration
     """
 
-    def __init__(self, params, shapes, n_channels, T=20, net_hidden=32, net_layers=2, alpha=0.99):
+    def __init__(self, params, shapes, n_channels, T=20, net_hidden=64, net_blocks=8, alpha=0.99):
         super().__init__()
 
         self.params = params
@@ -32,12 +32,7 @@ class UnrolledFBS(nn.Module):
         self.T = T
         self.alpha = alpha
 
-        self.dev_net= DeviationNet(
-            n_channels=n_channels,
-            hidden=net_hidden,
-            n_layers=net_layers,
-        )
-
+        self.dev_net = DeviationNet( n_channels=n_channels,hidden=net_hidden, n_blocks=net_blocks,)
 
     def _init_state(self, init_state):
         """
@@ -80,30 +75,25 @@ class UnrolledFBS(nn.Module):
         """
         C = functions["C"]
         RA = functions["RA"]
-        A=functions["A"]
-        sinogram=functions["sinogram"]
-
+   
         compute_delta = functions["compute_delta_torch"]
 
         x, y_prev, p_prev, z_prev, u, v,u_prev,v_prev= self._init_state(initial_state)
 
         residuals = []
-        F_vals=[]
+        AxCx=[]
 
         if return_all:
             x_hist, y_hist, p_hist, z_hist = [], [], [], []
             u_hist, v_hist, delta_hist = [], [], []
             
             
-        if self.training: 
-            T_rand = torch.randint(low=self.T, high=2*self.T, size=(1,)).item() 
-        else:
-            T_rand = self.T
+
+        T_run = random.randint(2, 2*self.T) if self.training else self.T
 
 
 
-
-        for n in range(T_rand):
+        for n in range(T_run):
         
             x_new, y, p, z, res = one_step(
                 x=x,
@@ -119,9 +109,10 @@ class UnrolledFBS(nn.Module):
             )
 
             delta = compute_delta(
-                p, x_new, p_prev, z, z_prev, y, y_prev, u, v, n
+                p, x, p_prev, z, z_prev, y, y_prev, u, v, n
             )
-            delta = torch.nan_to_num(delta, nan=0.0, posinf=0.0, neginf=0.0)
+       
+
 
           
             x_new = [t.float() for t in x_new]
@@ -130,18 +121,34 @@ class UnrolledFBS(nn.Module):
             z = [t.float() for t in z]
             
             Cy=C(y)
+            t_val = float(n) / max(self.T - 1, 1)
+            t = torch.full(
+                (x_new[0].shape[0], 1),
+                t_val,
+                device=x_new[0].device,
+                dtype=x_new[0].dtype
+            )
 
 
             u_raw, v_raw = self.dev_net(
                 shapes=self.shapes,
-                x_blocks=x_new ,    
-                p_blocks=p      ,    
-                y_blocks=y     ,    
-                z_blocks=z    ,     
-                u_prev=u_prev ,    
-                v_prev=v_prev , 
-                Cy=Cy,)
+                x_blocks=x_new,
+                p_blocks=p,
+                y_blocks=y,
+                z_blocks=z,
+                u_prev=u_prev,
+                v_prev=v_prev,
+                Cy=Cy,
+                t=t,
+            )
+            # dans UnrolledFBS.forward, après dev_net
+            u_raw_norm = block_norm_sq(u_raw).sqrt().clamp(min=1e-6)
+            v_raw_norm = block_norm_sq(v_raw).sqrt().clamp(min=1e-6)
 
+            # projette sur la sphère unité, puis laisse le safeguarding scaler
+            u_raw = [u_i / u_raw_norm for u_i in u_raw]
+            v_raw = [v_i / v_raw_norm for v_i in v_raw]
+            
             
             params = self.params
 
@@ -169,10 +176,12 @@ class UnrolledFBS(nn.Module):
 
 
             scale = self.alpha * ratio
+            
+
 
             u = [scale * u_i for u_i in u_raw]
             v = [scale * v_i for v_i in v_raw]
-
+ 
 
 
             x, y_prev, p_prev, z_prev = x_new, y, p, z
@@ -182,9 +191,11 @@ class UnrolledFBS(nn.Module):
 
             res = torch.nan_to_num(res, nan=1e6, posinf=1e6, neginf=1e6)
             residuals.append(res)
-            
-            tgv_x = tgv(x, initial_state, A, sinogram)
-            F_vals.append(tgv_x)
+            val = functions['kkt_residual_norm'](x)
+            AxCx.append(val)
+
+
+
 
             if return_all:
                 x_hist.append([t.clone() for t in x])
@@ -205,6 +216,10 @@ class UnrolledFBS(nn.Module):
                 "v": v_hist,
                 "delta": delta_hist,
             }
-            return F_vals, residuals, history
+            return AxCx, residuals, history
 
-        return F_vals, residuals
+        return AxCx, residuals
+    
+    
+    
+            

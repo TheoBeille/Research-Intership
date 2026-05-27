@@ -12,7 +12,7 @@ from odl.operator.pspace_ops import (
     BroadcastOperator,
 )
 
-def pdhg(data):
+def pdhg(data,nb_iter=10):
     U = odl.uniform_discr(
         min_pt=[-20, -20], max_pt=[20, 20], shape=[128, 128], dtype="float32"
     )
@@ -54,13 +54,15 @@ def pdhg(data):
 
     op_norm = 1.1 * odl.power_method_opnorm(op)
 
-    niter = 500
-    tau = 1.0 / op_norm
-    sigma = 1.0 / op_norm
+    niter = nb_iter
+    tau = 0.9 / op_norm
+    sigma = 0.9 / op_norm
 
     x = op.domain.zero()
+    x[0][:] = data
     F_values = []
-
+    x_iterates = []
+    x_iterates.append(x[0].copy()) 
     class CallbackStore(odl.solvers.Callback):
         def __init__(self):
             self.iter = 0
@@ -69,6 +71,8 @@ def pdhg(data):
             val = f(x) + g(op(x))
             val = float(val)
             F_values.append(val)
+
+            x_iterates.append(x[0].copy())
             self.iter += 1
             print(f"Iter {self.iter}: F(x) = {val:.6f}")
 
@@ -85,5 +89,5 @@ def pdhg(data):
         callback=callback,
     )
 
-    return x, F_values
+    return x, F_values, x_iterates
 

@@ -58,6 +58,8 @@ plt.imsave("phantom.png", phantom.asarray(), cmap="gray")
 
 data = A(phantom)
 data += white_noise(A.range) * np.mean(data.asarray()) * 0.1
+noise = A.adjoint(data)
+plt.imsave("noise.png", noise.asarray(), cmap="gray")
 plt.imsave("sinogram.png", data.asarray(), cmap="gray")
 
 # --- Set up inverse problem --- #
